@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:redis/redis.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(const RedisClientApp());
@@ -53,6 +54,10 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
   final usernameController = TextEditingController();
   final passwordController = TextEditingController();
 
+  final addKeyController = TextEditingController();
+  final addKeyValueController = TextEditingController();
+  final addKeyTtlController = TextEditingController();
+
   RedisServerConnection? get _selectedConnection {
     for (final connection in _connections) {
       if (connection.id == _selectedConnectionId) {
@@ -72,6 +77,9 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
     dbController.dispose();
     usernameController.dispose();
     passwordController.dispose();
+    addKeyController.dispose();
+    addKeyValueController.dispose();
+    addKeyTtlController.dispose();
     super.dispose();
   }
 
@@ -287,6 +295,114 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
     setState(() {});
   }
 
+  Future<void> _deleteKey(RedisServerConnection connection, String key) async {
+    try {
+      await connection.deleteKey(key);
+      _showMessage('已删除 Key: $key');
+      await _refreshConnection(connection);
+    } catch (error) {
+      _showMessage('删除 Key 失败: $error', isError: true);
+    }
+  }
+
+  // 目前只支持string，后续扩展
+  Future<void> _addKey(RedisServerConnection connection) async {
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('添加 Key'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: addKeyController,
+                  decoration: const InputDecoration(
+                    labelText: 'Key',
+                    prefixIcon: Icon(Icons.vpn_key_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: addKeyValueController,
+                  decoration: const InputDecoration(
+                    labelText: 'Value',
+                    prefixIcon: Icon(Icons.edit_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  keyboardType: TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
+                  ],
+                  controller: addKeyTtlController,
+                  decoration: const InputDecoration(
+                    labelText: 'TTL (秒)',
+                    prefixIcon: Icon(Icons.timer_outlined),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => {
+                  Navigator.of(dialogContext).pop(),
+                  addKeyController.clear(),
+                  addKeyValueController.clear(),
+                  addKeyTtlController.clear(),
+                },
+                child: const Text('取消'),
+              ),
+              FilledButton.icon(
+                onPressed: () async {
+                  final newKey = addKeyController.text.trim();
+                  final newValue = addKeyValueController.text;
+                  final newTtl = int.tryParse(addKeyTtlController.text);
+                  if (newKey.isEmpty) {
+                    return;
+                  }
+
+                  try {
+                    if (newTtl != null) {
+                      await connection._command?.send_object([
+                        'SET',
+                        newKey,
+                        newValue,
+                        'EX',
+                        newTtl,
+                      ]);
+                    } else {
+                      await connection._command?.send_object([
+                        'SET',
+                        newKey,
+                        newValue,
+                      ]);
+                    }
+                    _showMessage('已添加 Key: $newKey');
+                    await _refreshConnection(connection);
+
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop();
+                      addKeyController.clear();
+                      addKeyValueController.clear();
+                      addKeyTtlController.clear();
+                    }
+                  } catch (error) {
+                    _showMessage('添加 Key 失败: $error', isError: true);
+                  }
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('添加'),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {}
+  }
+
   void _showMessage(String message, {bool isError = false}) {
     final messenger = ScaffoldMessenger.of(context);
     messenger
@@ -298,6 +414,7 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
               ? Theme.of(context).colorScheme.errorContainer
               : null,
           showCloseIcon: true,
+          duration: Duration(milliseconds: 1000),
         ),
       );
   }
@@ -513,19 +630,29 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
         children: [
           ListTile(
             title: const Text('Key 列表'),
-            subtitle: Text('共 ${connection.keys.length} 个 key'),
-            trailing: IconButton(
-              tooltip: '刷新',
-              onPressed: connection.isBusy
-                  ? null
-                  : () => _refreshConnection(connection),
-              icon: connection.isBusy
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
+            subtitle: Text('共 ${connection.keys.length} 个'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: '添加Key',
+                  onPressed: () => _addKey(connection),
+                  icon: const Icon(Icons.add),
+                ),
+                IconButton(
+                  tooltip: '刷新',
+                  onPressed: connection.isBusy
+                      ? null
+                      : () => _refreshConnection(connection),
+                  icon: connection.isBusy
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                ),
+              ],
             ),
           ),
           const Divider(height: 1),
@@ -554,6 +681,23 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
                           key,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            size: 18, // 图标缩小
+                            color: Colors.redAccent,
+                          ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
+                          splashRadius: 18,
+                          tooltip: "删除 Key",
+                          onPressed: () {
+                            _deleteKey(connection, key);
+                          },
                         ),
                         onTap: () => _selectKey(connection, key),
                       );
@@ -587,13 +731,30 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
+                  Row(
                     children: [
-                      Text(selectedKey, style: theme.textTheme.titleLarge),
-                      if (connection.selectedValueType != null)
-                        Chip(label: Text(connection.selectedValueType!)),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            Text(
+                              selectedKey,
+                              style: theme.textTheme.titleLarge,
+                            ),
+                            if (connection.selectedValueType != null)
+                              Chip(label: Text(connection.selectedValueType!)),
+                          ],
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TTLWidget(
+                          keyName: selectedKey,
+                          loadTTL: connection.keyTtl,
+                          showRefresh: false,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 16),
@@ -626,6 +787,175 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
   }
 }
 
+class TTLWidget extends StatefulWidget {
+  final String keyName;
+
+  final Future<int> Function(String keyName) loadTTL;
+
+  final Duration syncInterval;
+
+  final bool showRefresh;
+
+  const TTLWidget({
+    super.key,
+    required this.keyName,
+    required this.loadTTL,
+    this.syncInterval = const Duration(seconds: 10),
+    this.showRefresh = true,
+  });
+
+  @override
+  State<TTLWidget> createState() => _TTLWidgetState();
+}
+
+class _TTLWidgetState extends State<TTLWidget> {
+  int _ttl = -1;
+  bool _loading = true;
+
+  Timer? _countdownTimer;
+  Timer? _syncTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _initTTL();
+  }
+
+  @override
+  void didUpdateWidget(covariant TTLWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // key切换时重新加载
+    if (oldWidget.keyName != widget.keyName) {
+      _stopTimers();
+      _initTTL();
+    }
+  }
+
+  Future<void> _initTTL() async {
+    setState(() {
+      _loading = true;
+    });
+
+    await _fetchTTL();
+
+    _startCountdown();
+    _startSync();
+
+    if (mounted) {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _fetchTTL() async {
+    try {
+      final value = await widget.loadTTL(widget.keyName);
+
+      if (!mounted) return;
+
+      setState(() {
+        _ttl = value;
+      });
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        _ttl = -2;
+      });
+    }
+  }
+
+  void _startCountdown() {
+    _countdownTimer?.cancel();
+
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+
+      if (_ttl > 0) {
+        setState(() {
+          _ttl--;
+        });
+      }
+    });
+  }
+
+  void _startSync() {
+    _syncTimer?.cancel();
+
+    _syncTimer = Timer.periodic(widget.syncInterval, (_) async {
+      await _fetchTTL();
+    });
+  }
+
+  void _stopTimers() {
+    _countdownTimer?.cancel();
+    _syncTimer?.cancel();
+  }
+
+  @override
+  void dispose() {
+    _stopTimers();
+    super.dispose();
+  }
+
+  Color _getColor(ThemeData theme) {
+    if (_ttl == -2) return Colors.red;
+    if (_ttl == -1) return Colors.blueGrey;
+    if (_ttl <= 10) return Colors.red;
+    if (_ttl <= 60) return Colors.orange;
+    return Colors.green;
+  }
+
+  String _getText() {
+    if (_loading) return "TTL...";
+    if (_ttl == -1) return "永久";
+    if (_ttl == -2) return "已过期";
+    return "${_ttl}s";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = _getColor(theme);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.timer_outlined, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(
+            _getText(),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          if (widget.showRefresh) ...[
+            const SizedBox(width: 6),
+            InkWell(
+              onTap: _fetchTTL,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: Icon(Icons.refresh, size: 14, color: color),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class RedisServerConnection {
   RedisServerConnection({
     required this.id,
@@ -652,6 +982,7 @@ class RedisServerConnection {
   String? selectedKey;
   String? selectedValue;
   String? selectedValueType;
+  int? selectedKeyTtl;
   String? lastError;
   List<String> keys = const [];
 
@@ -737,6 +1068,7 @@ class RedisServerConnection {
 
       selectedKey = key;
       selectedValueType = type;
+      selectedKeyTtl = await keyTtl(key);
       selectedValue = _formatValue(type, valueResponse);
     } finally {
       isValueLoading = false;
@@ -847,6 +1179,25 @@ class RedisServerConnection {
       );
     }
     return value;
+  }
+
+  Future<void> deleteKey(String key) async {
+    final command = _command;
+    if (command == null) {
+      throw StateError('当前连接不可用，请先刷新或重新连接。');
+    }
+
+    await command.send_object(['DEL', key]);
+  }
+
+  Future<int> keyTtl(String key) async {
+    final command = _command;
+    if (command == null) {
+      throw StateError('当前连接不可用，请先刷新或重新连接。');
+    }
+
+    final ttlResponse = await command.send_object(['TTL', key]);
+    return int.tryParse(ttlResponse?.toString() ?? '-1') ?? -1;
   }
 }
 
