@@ -255,6 +255,17 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
     _showMessage('已断开 ${connection.host}:${connection.port}');
   }
 
+  Future<void> _deleteConnection(RedisServerConnection connection) async {
+    if (_selectedConnectionId == connection.id) {
+      _selectedConnectionId = null;
+    }
+    await connection.disconnect();
+    setState(() {
+      _connections.removeWhere((c) => c.id == connection.id);
+    });
+    _showMessage('已删除 ${connection.host}:${connection.port}');
+  }
+
   Future<void> _selectKey(RedisServerConnection connection, String key) async {
     setState(() {
       connection.selectedKey = key;
@@ -286,6 +297,7 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
           backgroundColor: isError
               ? Theme.of(context).colorScheme.errorContainer
               : null,
+          showCloseIcon: true,
         ),
       );
   }
@@ -382,6 +394,7 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
                           },
                           onRefresh: () => _refreshConnection(connection),
                           onDisconnect: () => _disconnectConnection(connection),
+                          onDelete: () => _deleteConnection(connection),
                         );
                       },
                     ),
@@ -626,7 +639,7 @@ class RedisServerConnection {
   final String id;
   final String host;
   final int port;
-  final int db;
+  int db;
   final String username;
   final String password;
 
@@ -844,6 +857,7 @@ class _ConnectionCard extends StatelessWidget {
     required this.onTap,
     required this.onRefresh,
     required this.onDisconnect,
+    required this.onDelete,
   });
 
   final RedisServerConnection connection;
@@ -851,6 +865,7 @@ class _ConnectionCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onRefresh;
   final VoidCallback onDisconnect;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -892,25 +907,85 @@ class _ConnectionCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Chip(label: Text('DB ${connection.db}')),
-                  Chip(
-                    avatar: Icon(
-                      connection.isConnected
-                          ? Icons.check_circle_outline
-                          : Icons.pause_circle_outline,
-                      size: 18,
-                    ),
-                    label: Text(connection.isConnected ? '已连接' : '已断开'),
+                  IconButton.outlined(
+                    iconSize: 12,
+                    style: IconButton.styleFrom(minimumSize: Size(12, 12)),
+                    onPressed: connection.isBusy ? null : onRefresh,
+                    icon: connection.isBusy
+                        ? const SizedBox(
+                            width: 8,
+                            height: 8,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.refresh),
+                    tooltip: '刷新',
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton.outlined(
+                    iconSize: 12,
+                    style: IconButton.styleFrom(minimumSize: Size(12, 12)),
+                    onPressed: connection.isBusy || !connection.isConnected
+                        ? null
+                        : onDisconnect,
+                    icon: const Icon(Icons.link_off),
+                    tooltip: '断开连接',
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton.outlined(
+                    iconSize: 12,
+                    style: IconButton.styleFrom(minimumSize: Size(12, 12)),
+                    onPressed: onDelete,
+                    icon: const Icon(Icons.delete),
+                    tooltip: '删除',
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              Container(
+                height: 32,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: connection.db,
+                    icon: const Icon(Icons.keyboard_arrow_down, size: 18),
+                    borderRadius: BorderRadius.circular(12),
+                    style: const TextStyle(fontSize: 14, color: Colors.black87),
+                    items: List.generate(16, (index) {
+                      return DropdownMenuItem(
+                        value: index,
+                        child: Text("DB $index"),
+                      );
+                    }),
+                    onChanged: (value) {
+                      if (value != null) {
+                        connection.db = value;
+                        onRefresh();
+                      }
+                    },
+                  ),
+                ),
+              ),
+              // Wrap(
+              //   spacing: 8,
+              //   runSpacing: 8,
+              //   children: [
+              //     Chip(label: Text('DB ${connection.db}')),
+              //     Chip(
+              //       avatar: Icon(
+              //         connection.isConnected
+              //             ? Icons.check_circle_outline
+              //             : Icons.pause_circle_outline,
+              //         size: 18,
+              //       ),
+              //       label: Text(connection.isConnected ? '已连接' : '已断开'),
+              //     ),
+              //   ],
+              // ),
               if (connection.lastError != null) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -922,30 +997,6 @@ class _ConnectionCard extends StatelessWidget {
                   ),
                 ),
               ],
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: connection.isBusy ? null : onRefresh,
-                    icon: connection.isBusy
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.refresh),
-                    label: const Text('刷新'),
-                  ),
-                  const SizedBox(width: 8),
-                  TextButton.icon(
-                    onPressed: connection.isBusy || !connection.isConnected
-                        ? null
-                        : onDisconnect,
-                    icon: const Icon(Icons.link_off),
-                    label: const Text('断开'),
-                  ),
-                ],
-              ),
             ],
           ),
         ),
