@@ -4,8 +4,19 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:redis/redis.dart';
 import 'package:flutter/services.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'storage/redis_storage.dart';
+import 'models/redis_connection_info.dart';
 
-void main() {
+void main() async {
+  await Hive.initFlutter();
+
+  Hive.registerAdapter(RedisConnectionInfoAdapter());
+
+  // await Hive.deleteBoxFromDisk('redis_connection_info');
+
+  await Hive.openBox<RedisConnectionInfo>('redis_connection_info');
+
   runApp(const RedisClientApp());
 }
 
@@ -68,6 +79,12 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _loadConnections();
+  }
+
+  @override
   void dispose() {
     for (final connection in _connections) {
       unawaited(connection.disconnect());
@@ -81,6 +98,28 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
     addKeyValueController.dispose();
     addKeyTtlController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadConnections() async {
+    final storedConns = RedisStorage.getAll();
+    final loadedConnections = <RedisServerConnection>[];
+
+    for (final info in storedConns) {
+      final connection = RedisServerConnection(
+        id: info.id,
+        host: info.host,
+        port: info.port,
+        db: info.db,
+        username: info.username ?? '',
+        password: info.password ?? '',
+      );
+      loadedConnections.add(connection);
+    }
+
+    setState(() {
+      _connections.clear();
+      _connections.addAll(loadedConnections);
+    });
   }
 
   Future<void> _showAddConnectionDialog() async {
@@ -201,8 +240,26 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
                     _selectedConnectionId = connection.id;
                   });
 
-                  Navigator.of(dialogContext).pop();
                   await _refreshConnection(connection, showSuccess: true);
+
+                  await RedisStorage.add(
+                    RedisConnectionInfo(
+                      id: connection.id,
+                      host: connection.host,
+                      port: connection.port,
+                      db: connection.db,
+                      username: connection.username.isEmpty
+                          ? null
+                          : connection.username,
+                      password: connection.password.isEmpty
+                          ? null
+                          : connection.password,
+                    ),
+                  );
+
+                  if (dialogContext.mounted) {
+                    Navigator.of(dialogContext).pop();
+                  }
                 },
                 icon: const Icon(Icons.add_link),
                 label: const Text('保存并连接'),
@@ -268,6 +325,7 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
       _selectedConnectionId = null;
     }
     await connection.disconnect();
+    await RedisStorage.delete(connection.id);
     setState(() {
       _connections.removeWhere((c) => c.id == connection.id);
     });
@@ -505,6 +563,7 @@ class _RedisWorkbenchPageState extends State<RedisWorkbenchPage> {
                           connection: connection,
                           isSelected: isSelected,
                           onTap: () {
+                            _refreshConnection(connection);
                             setState(() {
                               _selectedConnectionId = connection.id;
                             });
@@ -1312,10 +1371,14 @@ class _ConnectionCard extends StatelessWidget {
                         child: Text("DB $index"),
                       );
                     }),
-                    onChanged: (value) {
+                    onChanged: (value) async {
                       if (value != null) {
                         connection.db = value;
                         onRefresh();
+                        await RedisStorage.updateDb(
+                          connection.id,
+                          connection.db,
+                        );
                       }
                     },
                   ),
